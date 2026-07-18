@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Futuristic Cat's Cradle Sandbox</title>
+  
+  <!-- Load p5.js Core Canvas Framework -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #050510;
+      overflow: hidden;
+      font-family: 'Courier New', Courier, monospace;
+    }
+
+    #canvas-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    /* Interactive CRT Cyberpunk Filter Overlay */
+    #canvas-container::after {
+      content: " ";
+      display: block;
+      position: absolute;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+      z-index: 2;
+      background-size: 100% 4px, 6px 100%;
+      pointer-events: none;
+    }
+
+    #ui-layer {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      color: #00ffcc;
+      text-shadow: 0 0 5px #00ffcc;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .status-panel {
+      background: rgba(5, 5, 20, 0.75);
+      border: 1px solid #ff00ff;
+      padding: 15px;
+      border-radius: 4px;
+      box-shadow: 0 0 15px rgba(255, 0, 255, 0.2);
+    }
+
+    h1 {
+      margin: 0 0 5px 0;
+      font-size: 1.2rem;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    
+    p {
+      margin: 0;
+      font-size: 0.85rem;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="ui-layer">
+    <div class="status-panel">
+      <h1 id="status-text">Initializing Systems...</h1>
+      <p id="sub-status">Awaiting camera and tracking model payload.</p>
+    </div>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <!-- Unified JS Execution Environment -->
+  <script type="module">
+    import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8";
+
+    let capture;
+    let handLandmarker;
+    let detections = null;
+    let isModelLoaded = false;
+    let isModelLoading = false;
+    let lastVideoTime = -1;
+    
+    const fingertipIndices = [4, 8, 12, 16, 20];
+    const elasticFactor = 0.25;
+    let currentStrings = [];
+
+    async function initializeHandTracking() {
+      if (isModelLoading || isModelLoaded) return;
+      isModelLoading = true;
+
+      try {
+        const vision = await FilesetResolver.forVisionTasks(
+          "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
+        );
+        
+        handLandmarker = await HandLandmarker.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+            delegate: "GPU"
+          },
+          runningMode: "VIDEO",
+          numHands: 2
+        });
+        
+        isModelLoaded = true;
+        const statusEl = document.getElementById('status-text');
+        if (statusEl) {
+          statusEl.innerText = "SYSTEM ACTIVE";
+          statusEl.style.color = "#00ffcc";
+        }
+        const subStatusEl = document.getElementById('sub-status');
+        if (subStatusEl) {
+          subStatusEl.innerText = "Raise both hands to weave the cradle.";
+        }
+      } catch (error) {
+        console.error("Error loading MediaPipe Hand Landmarker:", error);
+        const statusEl = document.getElementById('status-text');
+        if (statusEl) {
+          statusEl.innerText = "INITIALIZATION ERROR";
+          statusEl.style.color = "#ff0055";
+        }
+      }
+    }
+
+    window.setup = function() {
+      const cnv = createCanvas(windowWidth, windowHeight);
+      cnv.parent('canvas-container');
+      
+      capture = createCapture(VIDEO);
+      capture.size(640, 480);
+      capture.hide(); 
+      
+      for(let i = 0; i < 5; i++) {
+        currentStrings.push({
+          leftX: width/2, leftY: height/2,
+          rightX: width/2, rightY: height/2
+        });
+      }
+    };
+
+    window.draw = function() {
+      background(5, 5, 18); 
+
+      if (!capture || !capture.elt || capture.elt.readyState < 2) {
+        return; 
+      }
+
+      if (!isModelLoaded && !isModelLoading) {
+        initializeHandTracking();
+      }
+
+      // Render webcam feedback mirror configuration matrices
+      push();
+      translate(width, 0);
+      scale(-1, 1); 
+      tint(40, 50, 90, 180); 
+      image(capture, 0, 0, width, height);
+      pop();
+
+      if (isModelLoaded && capture.elt.readyState >= 4) {
+        let timestamp = performance.now();
+        if (capture.elt.currentTime !== lastVideoTime) {
+          lastVideoTime = capture.elt.currentTime;
+          detections = handLandmarker.detectForVideo(capture.elt, timestamp);
+        }
+      }
+
+      if (detections && detections.landmarks && detections.landmarks.length > 0) {
+        let leftHand = null;
+        let rightHand = null;
+
+        for (let i = 0; i < detections.landmarks.length; i++) {
+          let handedness = detections.handedness[i]?.[0]?.categoryName; 
+          
+          if (handedness === "Left") {
+            rightHand = detections.landmarks[i];
+          } else if (handedness === "Right") {
+            leftHand = detections.landmarks[i];
+          }
+        }
+
+        for (let i = 0; i < detections.landmarks.length; i++) {
+          renderHandJoints(detections.landmarks[i]);
+        }
+
+        if (leftHand && rightHand) {
+          drawCradleStrings(leftHand, rightHand);
+        }
+      }
+    };
+
+    function renderHandJoints(landmarks) {
+      push();
+      drawingContext.shadowBlur = 12;
+      drawingContext.shadowColor = '#00ffff';
+      fill(0, 255, 204);
+      noStroke();
+
+      for (let point of landmarks) {
+        let x = map(point.x, 1, 0, 0, width);
+        let y = map(point.y, 0, 1, 0, height);
+        ellipse(x, y, 8, 8);
+      }
+      pop();
+    }
+
+    function drawCradleStrings(leftHand, rightHand) {
+      let leftCenter = getHandCenter(leftHand);
+      let rightCenter = getHandCenter(rightHand);
+      let spanDistance = dist(leftCenter.x, leftCenter.y, rightCenter.x, rightCenter.y);
+      
+      let maxSpan = width * 0.7;
+      let extensionRatio = constrain(spanDistance / maxSpan, 0.1, 1.0);
+      let strokeW = map(extensionRatio, 0.1, 1.0, 5, 1.5);
+
+      push();
+      drawingContext.shadowBlur = 20 * extensionRatio + 5;
+      noFill();
+      strokeWeight(strokeW);
+
+      for (let i = 0; i < fingertipIndices.length; i++) {
+        let lIdx = fingertipIndices[i];
+        let rIdx = fingertipIndices[4 - i]; 
+
+        let targetLX = map(leftHand[lIdx].x, 1, 0, 0, width);
+        let targetLY = map(leftHand[lIdx].y, 0, 1, 0, height);
+        let targetRX = map(rightHand[rIdx].x, 1, 0, 0, width);
+        let targetRY = map(rightHand[rIdx].y, 0, 1, 0, height);
+
+        currentStrings[i].leftX += (targetLX - currentStrings[i].leftX) * elasticFactor;
+        currentStrings[i].leftY += (targetLY - currentStrings[i].leftY) * elasticFactor;
+        currentStrings[i].rightX += (targetRX - currentStrings[i].rightX) * elasticFactor;
+        currentStrings[i].rightY += (targetRY - currentStrings[i].rightY) * elasticFactor;
+
+        let NeonGradient = drawingContext.createLinearGradient(
+          currentStrings[i].leftX, currentStrings[i].leftY, 
+          currentStrings[i].rightX, currentStrings[i].rightY
+        );
+        
+        if(extensionRatio > 0.65) {
+          NeonGradient.addColorStop(0, '#ffff00');
+          NeonGradient.addColorStop(0.5, '#ff00ff');
+          NeonGradient.addColorStop(1, '#ffff00');
+          drawingContext.shadowColor = '#ff00ff';
+        } else {
+          NeonGradient.addColorStop(0, '#00ffff');
+          NeonGradient.addColorStop(0.5, '#ff00ff');
+          NeonGradient.addColorStop(1, '#00ffff');
+          drawingContext.shadowColor = '#00ffff';
+        }
+
+        drawingContext.strokeStyle = NeonGradient;
+
+        beginShape();
+        vertex(currentStrings[i].leftX, currentStrings[i].leftY);
+        let midX = (currentStrings[i].leftX + currentStrings[i].rightX) / 2;
+        let midY = (currentStrings[i].leftY + currentStrings[i].rightY) / 2 + (map(extensionRatio, 0.1, 1, 35, 2));
+        quadraticVertex(midX, midY, currentStrings[i].rightX, currentStrings[i].rightY);
+        endShape();
+      }
+      pop();
+    }
+
+    function getHandCenter(handLandmarks) {
+      if (!handLandmarks || !handLandmarks[0]) return { x: width/2, y: height/2 };
+      let x = map(handLandmarks[0].x, 1, 0, 0, width);
+      let y = map(handLandmarks[0].y, 0, 1, 0, height);
+      return { x, y };
+    }
+
+    window.windowResized = function() {
+      resizeCanvas(windowWidth, windowHeight);
+    };
+  </script>
+</body>
+</html>
